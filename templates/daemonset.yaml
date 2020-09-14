@@ -1,0 +1,115 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  labels:
+    app: {{ template "kube-keepalived-vip.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+  name: {{ template "kube-keepalived-vip.fullname" . }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ template "kube-keepalived-vip.name" . }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "kube-keepalived-vip.name" . }}
+        release: {{ .Release.Name }}
+        {{- if .Values.podLabels }}
+{{ toYaml .Values.podLabels | indent 8}}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    {{- if .Values.podAnnotations }}
+{{ toYaml .Values.podAnnotations | indent 8}}
+    {{- end }}
+      labels:
+        app: {{ template "kube-keepalived-vip.name" . }}
+        release: {{ .Release.Name }}
+        {{- if .Values.podLabels }}
+{{ toYaml .Values.podLabels | indent 8}}
+        {{- end }}
+    spec:
+      hostNetwork: true
+      serviceAccountName: {{ if .Values.rbac.create }}{{ template "kube-keepalived-vip.fullname" . }}{{ else }}"{{ .Values.rbac.serviceAccountName }}"{{ end }}
+      containers:
+        - name: {{ template "kube-keepalived-vip.name" . }}-{{ .Values.keepalived.name }}
+          image: {{ template "system_default_registry" . }}{{ .Values.keepalived.image.repository }}:{{ .Values.keepalived.image.tag }}
+          imagePullPolicy: "{{ .Values.keepalived.image.pullPolicy }}"
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              host: 127.0.0.1
+              path: /health
+              port: {{ .Values.httpPort }}
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            successThreshold: 1
+            timeoutSeconds: 5
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /lib/modules
+              name: modules
+              readOnly: true
+            - mountPath: /dev
+              name: dev
+          # use downward API
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: KEEPALIVED_NOTIFY
+              value: /keepalived-check.sh
+          args:
+            - --services-configmap={{ .Release.Namespace }}/{{ template "kube-keepalived-vip.fullname" . }}
+            - --use-unicast={{ .Values.keepalived.useUnicast }}
+            - --vrid={{ .Values.keepalived.vrid }}
+            - --watch-all-namespaces={{ .Values.keepalived.watchAllNamespace }}
+            - --http-port={{ .Values.httpPort }}
+        {{- if .Values.keepalived.resources }}
+          resources:
+{{ toYaml .Values.keepalived.resources | indent 12 }}
+        {{- end }}
+      volumes:
+        - name: modules
+          hostPath:
+            path: /lib/modules
+        - name: dev
+          hostPath:
+            path: /dev
+    {{- if .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+    {{- end }}
+    {{- if .Values.tolerations }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+    {{- end }}
+    {{- if .Values.affinity.enabled }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                {{- range .Values.affinity.nodes }}
+                - {{ . | quote }}
+                {{- end }}
+    {{- end }}
+      serviceAccountName: {{ if .Values.rbac.create }}{{ template "kube-keepalived-vip.fullname" . }}{{ else }}"{{ .Values.rbac.serviceAccountName }}"{{ end }}
+      terminationGracePeriodSeconds: 60
+{{- if .Values.updateStrategy }}
+  updateStrategy:
+{{ toYaml .Values.updateStrategy | indent 4 }}
+{{- end }}
